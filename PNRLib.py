@@ -627,14 +627,14 @@ def getExpMatrix(nMax, eta, pB, pA, tD, bin_width, p1data, window_width, RTorder
     return np.matmul(matAP, np.matmul(matRT, np.matmul(matBC, matL)))
 
 # EME = expectation-maximization entropy
-def getInputDist_EME(expDist, matD, l=1e-3, iterations=1e10, epsilon=1e-12):
+def getInputDist_EME(expDist, matD, l=0.5e-2, iterations=1e10, epsilon=1e-12):
     """
     This function implements the EME algorithm as discussed in the paper.
     Inputs: 
         expDist: the experimental click number distribution (size should match that of matD)
         matD: the detector effects matrix
         [l]: the entropy regularization strength parameter (denoted alpha in the paper);
-            default 1e-3.
+            default 0.5e-2.
         [iterations]: the maximum number of iterations to perform; default 1e10.
         [epsilon]: the convergence condition parameter; default 1e-12.
     Outputs:
@@ -709,7 +709,7 @@ def getFidelity(expDist, thDist):
 """
 ####################################################################################################
 #
-# Getting and simulating errors
+# Getting and simulating uncertainties
 #
 ####################################################################################################
 """
@@ -744,3 +744,81 @@ def getCohDistErrors(nBar, u_nBar, n, numExps = 1000):
     distErrs = np.std(distData, axis=1)
     
     return dist, distErrs
+
+def getReconDist(expDist, nMax, eta, pB, pA, tD, tRec, bin_width, p1data, window_width, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
+    """
+    This function combines getExpMatrix() and getInputDist_EME() to output a reconstructed distribution
+    given all the relevant inputs. The inputs are all the same as the above two functions; see their
+    docstrings for details.
+    Outputs:
+        A reconstructed distribution, as a 1D NumPy array of size nMax+1.
+    """
+    
+    # Get the detector matrix
+    matD = getExpMatrix(nMax, eta, pB, pA, np.array([tD, tRec]), bin_width, p1data, window_width, RTorder = RTorder, RTbrko = RTbrko, RTverbose = RTverbose, APorder = APorder)
+    # Reconstruct the distribution
+    recon_eme = getInputDist_EME(expDist, matD, l=l, iterations=iterations, epsilon=epsilon)
+    
+    return recon_eme
+
+def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, p1data, window_width, CPUs = 0, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
+    """
+    This function performs a Monte Carlo simulation of the uncertainties on the reconstructed distribution
+    given uncertainties on all the detector parameters.
+    Inputs:
+        nExp: The number of Monte Carlo runs ("experiments") to perform
+        expDist: the experimental click number distribution
+        nMax: the max n of the truncated basis
+        eta0: a 2-tuple [detector efficiency, uncertainty on detector efficiency]
+        pB: a 2-tuple [probability of a background count in the window, uncertainty in that probability]
+        pA: a 2-tuple [probability of an afterpulse, uncertainty in that probability]
+        tD: a 2-tuple [dead time, uncertainty in the dead time] (sec)
+        tRec: a 2-tuple [recovery time, uncertainty in the recovery time] (sec)
+        bin_width: the bin width (sec)
+        p1data: the photon profile gamma(t) to integrate with. I typically use the histogram
+            of experimental runs where only one click occurred divided by the total number of experimental
+            runs.
+        window_width: the width of the data collection window (sec)
+        [CPUs]: the number of parallel threads to open. If set to zero, uses multiprocessing.cpu_count().
+            Default 0.
+        [RTorder]: the order of recovery time corrections to keep. Default 2.
+        [RTbrko]: See the documentation of constructRTmatrix for backRefKeepOrder. Default 0.
+        [RTverbose]: See the documentation of constructRTmatrix for verbose. Default True.
+        [APorder]: the order of afterpulsing effects to keep. Default 2.
+        [l]: the entropy regularization strength parameter (denoted alpha in the paper);
+            default 0.5e-2.
+        [iterations]: the maximum number of iterations to perform; default 1e10.
+        [epsilon]: the convergence condition parameter; default 1e-12.
+    Outputs:
+        reconDists: a 2D NumPy array of shape (nExp, nMax+1) containing the reconstructed
+            distributions from all of the runs. You can then use np.mean and np.std with
+            axis = 0 to obtain statistics.
+    
+    """
+    if (CPUs == 0):
+        CPUs = mp.cpu_count()
+    
+    # Initialize the random number generator (RNG)
+    rng = np.random.default_rng()
+    
+    # Sample from Gaussians with mean and width as given
+    etas = rng.normal(eta0[0], eta0[1], nExp)
+    pBs = rng.normal(pB[0], pB[1], nExp)
+    pAs = rng.normal(pA[0], pA[1], nExp)
+    tDs = rng.normal(tD[0], tD[1], nExp)
+    tRs = rng.normal(tRec[0], tRec[1], nExp)
+    
+    # Initialize the worker pool and assign the tasks
+    pool = mp.Pool(CPUs)
+    distResObjs = [pool.apply_async(getReconDist, args = (expDist, nMax, etas[i], pBs[i], pAs[i], tDs[i], tRs[i], bin_width, p1data, window_width, ), kwds = {'RTorder': RTorder, 'RTbrko': RTbrko, 'RTverbose': RTverbose, 'APorder': APorder, 'l': l, 'iterations': iterations, 'epsilon': epsilon}) for i in range(nExp)]
+    pool.close()
+    pool.join()
+    
+    # Get the results and collect them in the array to return
+    reconDists = np.zeros((nExp, nMax+1))
+    for i, res in enumerate(distResObjs):
+        reconDists[i] = res.get()
+
+    del pool
+    print("Done.")
+    return reconDists
