@@ -10,3 +10,5 @@
 # Acknowledgments
 
 The authors thank Alessandro Restelli for helpful discussions. This material is based upon work supported by the National Science Foundation Graduate Research Fellowship Program under Grant No. DGE 1840340. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the National Science Foundation.
+
+The function in this code that implements the EME algorithm is very close to the code given in Hlousek et al., "Accurate Detection of Arbitrary Photon Statistics", Phys Rev Lett (2019), https://doi.org/10.1103/PhysRevLett.123.153604.
