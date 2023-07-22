@@ -204,7 +204,7 @@ def getNums(s):
     nCl = 1 + len(sRec.split('3'))-1 + len([i for i in sArr if (i.find('2') != -1)])
     return nPh, nCl
 
-def constructRTmatrix(size, order, tD, bw, normedSignalData, window_width, backRefKeepOrder = 0, verbose = True):
+def constructRTmatrix(size, order, tD, bw, normedSignalData, window_width, backRefKeepOrder = 0, verbose = True, newStrArr=np.array([])):
     """
     This function constructs the recovery time effects matrix R.
     It's a big function. If you need to figure out how it works, I suggest you first get up,
@@ -229,6 +229,10 @@ def constructRTmatrix(size, order, tD, bw, normedSignalData, window_width, backR
             orders or large data collection windows. 
         [verbose]: Prints out extra diagnostic messages if True. Can be helpful if the calculation is long
             and you're impatient like me. Default True.
+        [newStrArr]: Pass in a list of event strings in advance, and this method will use that array instead
+            of computing it. If np.array([]), will compute the array. Defaults to np.array([]). This is
+            mostly useful when you're running parallelized uncertainty calculation; the methods below
+            pre-compute the event string array so they can save time by doing it once and then passing it in.
             
     The function implements the discussion of Sec. A.III. of the Supplemental Material.
     """
@@ -256,39 +260,41 @@ def constructRTmatrix(size, order, tD, bw, normedSignalData, window_width, backR
         norms[ind] = np.sum(nArrTemp)
         
     ### Step two: generate strings
-    # Here we first build all possible combinations of 1's, 2's, and 3's given
-    # the size and order parameter
-    # I found this manual for loop to be better than e.g. itertools
-    if verbose: print("Generating strings...", end=" ")
-    # Seed the string array with the initial cases
-    # Remember that all possible events begin with a 3-type photon
-    strArr = np.array(['31', '32', '33'])
+    # Only do so if newStrArr isn't already built
+    if (len(newStrArr) == 0):
+        # Here we first build all possible combinations of 1's, 2's, and 3's given
+        # the size and order parameter
+        # I found this manual for loop to be better than e.g. itertools
+        if verbose: print("Generating strings...", end=" ")
+        # Seed the string array with the initial cases
+        # Remember that all possible events begin with a 3-type photon
+        strArr = np.array(['31', '32', '33'])
 
-    newStrs = np.array([])
-    for i in range(2, size-1):
-        # Find the strings where there are already enough 1s and 2s for the order parameter (inds12)
-        # For strings where there are enough, we can only add 3s; for strings where we haven't
-        #     hit the limit (inds3), we can add 1, 2, or 3
-        inds12 = np.where(np.array([s.count('1') + s.count('2') for s in strArr]) >= order)[0]
-        inds3 = np.setdiff1d(np.arange(len(strArr)), inds12)
-        newStrs = np.concatenate(([s + '3' for s in strArr[inds12]],
-                        [s + '1' for s in strArr[inds3]], [s + '2' for s in strArr[inds3]], [s + '3' for s in strArr[inds3]]
-                       ))
-        # After each step, take care to produce an array that's sorted by length,
-        # then sorted by 1,2,3, AND contains only unique strings
-        # This helps later when we generate integrals based on previous strings
-        strArr = np.append(strArr, np.sort(newStrs))
-        indexes = np.unique(strArr, return_index=True)[1]
-        strArr = np.array([strArr[index] for index in sorted(indexes)])
-    
-    # Now get the event strings using getStrings()
-    t0 = time.time()
-    newStrArr = np.array([])
-    for i, s in enumerate(strArr):
-        newStrArr = np.append(newStrArr, getStrings(s))
-        if ((len(strArr) > 10000) and i%10000 == 0):
-            print(i, end=" ")
-    if verbose: print("Completed in", time.time()-t0, "seconds.", end=" ")
+        newStrs = np.array([])
+        for i in range(2, size-1):
+            # Find the strings where there are already enough 1s and 2s for the order parameter (inds12)
+            # For strings where there are enough, we can only add 3s; for strings where we haven't
+            #     hit the limit (inds3), we can add 1, 2, or 3
+            inds12 = np.where(np.array([s.count('1') + s.count('2') for s in strArr]) >= order)[0]
+            inds3 = np.setdiff1d(np.arange(len(strArr)), inds12)
+            newStrs = np.concatenate(([s + '3' for s in strArr[inds12]],
+                            [s + '1' for s in strArr[inds3]], [s + '2' for s in strArr[inds3]], [s + '3' for s in strArr[inds3]]
+                           ))
+            # After each step, take care to produce an array that's sorted by length,
+            # then sorted by 1,2,3, AND contains only unique strings
+            # This helps later when we generate integrals based on previous strings
+            strArr = np.append(strArr, np.sort(newStrs))
+            indexes = np.unique(strArr, return_index=True)[1]
+            strArr = np.array([strArr[index] for index in sorted(indexes)])
+
+        # Now get the event strings using getStrings()
+        t0 = time.time()
+        newStrArr = np.array([])
+        for i, s in enumerate(strArr):
+            newStrArr = np.append(newStrArr, getStrings(s))
+            if ((len(strArr) > 10000) and i%10000 == 0):
+                print(i, end=" ")
+        if verbose: print("Completed in", time.time()-t0, "seconds.", end=" ")
 
     ### Step three: perform the integrals and add them to the matrix
     # The way we perform integrals here is by building up the arrays one step at a time.
@@ -596,7 +602,7 @@ def constructAPMatrix(pA, nMax, APorder = 2):
 ####################################################################################################
 """
 
-def getExpMatrix(nMax, eta, pB, pA, tD, bin_width, p1data, window_width, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2):
+def getExpMatrix(nMax, eta, pB, pA, tD, bin_width, p1data, window_width, RTorder = 2, RTbrko = 0, RTverbose = True, RTstrArr = np.array([]), APorder = 2):
     """
     This function calculates the detector matrix.
     
@@ -620,7 +626,7 @@ def getExpMatrix(nMax, eta, pB, pA, tD, bin_width, p1data, window_width, RTorder
     """
 
     matAP = constructAPMatrix(pA, nMax, APorder=APorder)
-    matRT = constructRTmatrix(nMax+1, RTorder, tD, bin_width, p1data, window_width, backRefKeepOrder=RTbrko, verbose=RTverbose)
+    matRT = constructRTmatrix(nMax+1, RTorder, tD, bin_width, p1data, window_width, backRefKeepOrder=RTbrko, verbose=RTverbose, newStrArr=RTstrArr)
     matBC = constructBCMatrix(pB, nMax)
     matL = getBernoulliMat(eta, nMax)
     
@@ -745,7 +751,7 @@ def getCohDistErrors(nBar, u_nBar, n, numExps = 1000):
     
     return dist, distErrs
 
-def getReconDist(expDist, nMax, eta, pB, pA, tD, tRec, bin_width, p1data, window_width, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
+def getReconDist(expDist, nMax, eta, pB, pA, tD, tRec, bin_width, p1data, window_width, RTorder = 2, RTbrko = 0, RTverbose = True, RTstrArr = np.array([]), APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
     """
     This function combines getExpMatrix() and getInputDist_EME() to output a reconstructed distribution
     given all the relevant inputs. The inputs are all the same as the above two functions; see their
@@ -755,7 +761,7 @@ def getReconDist(expDist, nMax, eta, pB, pA, tD, tRec, bin_width, p1data, window
     """
     
     # Get the detector matrix
-    matD = getExpMatrix(nMax, eta, pB, pA, np.array([tD, tRec]), bin_width, p1data, window_width, RTorder = RTorder, RTbrko = RTbrko, RTverbose = RTverbose, APorder = APorder)
+    matD = getExpMatrix(nMax, eta, pB, pA, np.array([tD, tRec]), bin_width, p1data, window_width, RTorder = RTorder, RTbrko = RTbrko, RTverbose = RTverbose, RTstrArr = RTstrArr, APorder = APorder)
     # Reconstruct the distribution
     recon_eme = getInputDist_EME(expDist, matD, l=l, iterations=iterations, epsilon=epsilon)
     
@@ -808,9 +814,37 @@ def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, 
     tDs = rng.normal(tD[0], tD[1], nExp)
     tRs = rng.normal(tRec[0], tRec[1], nExp)
     
+    # Pre-build the list of event strings for the dead time effects, and
+    #     pass it in via the keyword arguments so we only ahve to compute it once
+    # This code is the same as in constructRTmatrix(); refer to comments there for details
+    print("Getting the dead time correction strings...", end=" ")
+    strArr = np.array(['31', '32', '33'])
+
+    newStrs = np.array([])
+    for i in range(2, nMax):
+        inds12 = np.where(np.array([s.count('1') + s.count('2') for s in strArr]) >= RTorder)[0]
+        inds3 = np.setdiff1d(np.arange(len(strArr)), inds12)
+        newStrs = np.concatenate(([s + '3' for s in strArr[inds12]],
+                        [s + '1' for s in strArr[inds3]], [s + '2' for s in strArr[inds3]], [s + '3' for s in strArr[inds3]]
+                       ))
+        strArr = np.append(strArr, np.sort(newStrs))
+        indexes = np.unique(strArr, return_index=True)[1]
+        strArr = np.array([strArr[index] for index in sorted(indexes)])
+
+    print("Got", len(strArr), "strings...", end=" ")
+    t0 = time.time()
+    newStrArr = np.array([])
+    for i, s in enumerate(strArr):
+        newStrArr = np.append(newStrArr, getStrings(s))
+        if ((len(strArr) > 10000) and i%10000 == 0):
+            print(i, end=" ")
+    print("Completed in", time.time()-t0, "seconds.")
+        
+    print("Starting the parallelized computations.")
+    
     # Initialize the worker pool and assign the tasks
     pool = mp.Pool(CPUs)
-    distResObjs = [pool.apply_async(getReconDist, args = (expDist, nMax, etas[i], pBs[i], pAs[i], tDs[i], tRs[i], bin_width, p1data, window_width, ), kwds = {'RTorder': RTorder, 'RTbrko': RTbrko, 'RTverbose': RTverbose, 'APorder': APorder, 'l': l, 'iterations': iterations, 'epsilon': epsilon}) for i in range(nExp)]
+    distResObjs = [pool.apply_async(getReconDist, args = (expDist, nMax, etas[i], pBs[i], pAs[i], tDs[i], tRs[i], bin_width, p1data, window_width, ), kwds = {'RTorder': RTorder, 'RTbrko': RTbrko, 'RTverbose': RTverbose, 'RTstrArr': newStrArr, 'APorder': APorder, 'l': l, 'iterations': iterations, 'epsilon': epsilon}) for i in range(nExp)]
     pool.close()
     pool.join()
     
