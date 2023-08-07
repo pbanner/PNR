@@ -767,7 +767,7 @@ def getReconDist(expDist, nMax, eta, pB, pA, tD, tRec, bin_width, p1data, window
     
     return recon_eme
 
-def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, p1data, window_width, CPUs = 0, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
+def getReconDistErrorsP(nExp, expDist, nMax, nTot, eta0, pB, pA, tD, tRec, bin_width, p1data, window_width, CPUs = 0, detOnly = 0, RTorder = 2, RTbrko = 0, RTverbose = True, APorder = 2, l=0.5e-2, iterations=1e10, epsilon=1e-12):
     """
     This function performs a Monte Carlo simulation of the uncertainties on the reconstructed distribution
     given uncertainties on all the detector parameters.
@@ -775,6 +775,7 @@ def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, 
         nExp: The number of Monte Carlo runs ("experiments") to perform
         expDist: the experimental click number distribution
         nMax: the max n of the truncated basis
+        nTot: the total number of experimental runs
         eta0: a 2-tuple [detector efficiency, uncertainty on detector efficiency]
         pB: a 2-tuple [probability of a background count in the window, uncertainty in that probability]
         pA: a 2-tuple [probability of an afterpulse, uncertainty in that probability]
@@ -787,6 +788,9 @@ def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, 
         window_width: the width of the data collection window (sec)
         [CPUs]: the number of parallel threads to open. If set to zero, uses multiprocessing.cpu_count().
             Default 0.
+        [detOnly]: if 1, will simulate errors only due to detector parameter uncertainties; if 0, will also
+            approximate sampling error by treating the distribution of each component of the click
+            distribution as Poissonian. Default 0.
         [RTorder]: the order of recovery time corrections to keep. Default 2.
         [RTbrko]: See the documentation of constructRTmatrix for backRefKeepOrder. Default 0.
         [RTverbose]: See the documentation of constructRTmatrix for verbose. Default True.
@@ -806,6 +810,17 @@ def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, 
     
     # Initialize the random number generator (RNG)
     rng = np.random.default_rng()
+    
+    # Get the number distributions
+    nds = np.zeros((nMax+1, nExp))
+    if not detOnly:
+        for i in range(nMax+1):
+            if (expDist[i] != 0):
+                # Otherwise leave it zero
+                nds[i] = rng.poisson(lam = round(expDist[i]*nTot), size=nExp)
+        nds = np.transpose(nds)
+        for j in range(nExp):
+            nds[j] = nds[j]/np.sum(nds[j])
     
     # Sample from Gaussians with mean and width as given
     etas = rng.normal(eta0[0], eta0[1], nExp)
@@ -844,7 +859,7 @@ def getReconDistErrorsP(nExp, expDist, nMax, eta0, pB, pA, tD, tRec, bin_width, 
     
     # Initialize the worker pool and assign the tasks
     pool = mp.Pool(CPUs)
-    distResObjs = [pool.apply_async(getReconDist, args = (expDist, nMax, etas[i], pBs[i], pAs[i], tDs[i], tRs[i], bin_width, p1data, window_width, ), kwds = {'RTorder': RTorder, 'RTbrko': RTbrko, 'RTverbose': RTverbose, 'RTstrArr': newStrArr, 'APorder': APorder, 'l': l, 'iterations': iterations, 'epsilon': epsilon}) for i in range(nExp)]
+    distResObjs = [pool.apply_async(getReconDist, args = ((1-detOnly)*nds[i] + detOnly*expDist, nMax, etas[i], pBs[i], pAs[i], tDs[i], tRs[i], bin_width, p1data, window_width, ), kwds = {'RTorder': RTorder, 'RTbrko': RTbrko, 'RTverbose': RTverbose, 'RTstrArr': newStrArr, 'APorder': APorder, 'l': l, 'iterations': iterations, 'epsilon': epsilon}) for i in range(nExp)]
     pool.close()
     pool.join()
     
